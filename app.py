@@ -21,7 +21,7 @@ genai.configure(api_key=gemini_key)
 
 # HOAの設定（ロボット語 + 家計簿抽出）
 model = genai.GenerativeModel(
-    model_name="models/gemini-2.0-flash-lite-preview-02-05",
+    model_name="models/gemini-flash-lite-latest",
     system_instruction=(
         "あなたは家計簿管理ロボットの『HOA』です。"
         "返答はすべて『〜ピポ』『〜ガガッ』などのロボット語で行ってください。"
