@@ -1,5 +1,6 @@
 import os
 import requests
+from datetime import datetime, timedelta, timezone
 from flask import Flask, request, abort
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
@@ -26,7 +27,7 @@ model = genai.GenerativeModel(
     system_instruction=(
         "あなたは家計簿管理ロボットの『HOA』です。"
         "ユーザーとの対話はすべて『〜ピポ』『〜ガガッ』などのロボット語で行ってください。"
-        "ユーザーの入力から『日付（yyyy/mm/dd形式、指定がなければ今日）』『内容』『金額』『支払い方法』『収支区分（収入または支出）』を抽出してください。"
+        "ユーザーの入力から『日付（yyyy/mm/dd形式）』『内容』『金額』『支払い方法』『収支区分（収入または支出）』を抽出してください。"
         "最後に必ず 'Date:日付, Item:内容, Amount:金額, Method:方法, Type:区分' という形式で出力してください。"
         "【重要】抽出セクションのタグの中身には、絶対に『ピポ』や『ガガ』等の語尾を混ぜず、純粋なデータのみを記載してください。"
     )
@@ -46,8 +47,16 @@ def callback():
 def handle_message(event):
     user_message = event.message.text
     
+    # --- タイムスリップ防止機能を追加！ ---
+    # 日本の現在時刻を取得して、Geminiに「今日」を教えるピポ！
+    jst = timezone(timedelta(hours=+9), 'JST')
+    today_str = datetime.now(jst).strftime('%Y/%m/%d')
+    
+    # Geminiへの依頼文（プロンプト）に今日の日付を混ぜるガガッ！
+    prompt = f"今日の日付は {today_str} です。これを基準にして以下のメッセージから家計簿データを抽出してピポ！\n\n{user_message}"
+    
     # Geminiで解析
-    response = model.generate_content(user_message)
+    response = model.generate_content(prompt)
     reply_text = response.text
 
     # スプレッドシート（GAS）にデータを送信する処理
