@@ -51,22 +51,31 @@ def handle_message(event):
     # スプレッドシート（GAS）にデータを送信する処理
     if "Item:" in reply_text:
         try:
-            # 抽出処理
+            # 抽出処理（お尻のカンマや改行に強くなるように修正したピポ！）
             item = reply_text.split("Item:")[1].split(",")[0].strip()
             amount = reply_text.split("Amount:")[1].split(",")[0].strip()
             method = reply_text.split("Method:")[1].split(",")[0].strip()
-            type_val = reply_text.split("Type:")[1].strip()
+            # Typeの後に何かが続いてもしっかり抽出するピポ！
+            type_val = reply_text.split("Type:")[1].split("\n")[0].strip()
 
-            # GASへポスト
-            requests.post(gas_url, json={
-                "item": item, 
-                "amount": amount, 
-                "method": method, 
-                "type": type_val
-            })
+            # GASへポスト（リダイレクトを許可して、タイムアウトも設定したガガッ！）
+            gas_res = requests.post(
+                gas_url, 
+                json={
+                    "item": item, 
+                    "amount": amount, 
+                    "method": method, 
+                    "type": type_val
+                },
+                allow_redirects=True,
+                timeout=10
+            )
+            print(f"GAS Response Status: {gas_res.status_code}") # ログで確認できるピポ
+            
         except Exception as e:
             print(f"Data Transfer Error: {e}")
 
+    # LINEへの返信（ここは変更なしピポ！）
     with ApiClient(configuration) as api_client:
         line_bot_api = MessagingApi(api_client)
         line_bot_api.reply_message_with_http_info(
