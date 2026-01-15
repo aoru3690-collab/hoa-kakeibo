@@ -19,15 +19,17 @@ configuration = Configuration(access_token=line_token)
 handler = WebhookHandler(line_secret)
 genai.configure(api_key=gemini_key)
 
-# HOAの設定（ロボット語 + 家計簿抽出）
+# HOAの設定（ロボット語 + 日付抽出対応）
+# 【モデル確認】Gemini 1.5 Flashや2.0は使わず、約束通り軽量最新の models/gemini-flash-lite-latest を使用ピポ！
 model = genai.GenerativeModel(
     model_name="models/gemini-flash-lite-latest",
     system_instruction=(
-    "あなたは家計簿管理ロボットの『HOA』です。"
-    "ユーザーとの会話は『〜ピポ』『〜ガガッ』等のロボット語で行ってください。"
-    "ただし、最後にデータ抽出用の文字列を必ず出力してください。"
-    "【重要】抽出セクションのタグ(Item, Amount, Method, Type)の中身には、絶対に『ピポ』や『ガガ』等の語尾を混ぜず、純粋なデータのみを記載してください。"
-    "形式：'Item:内容, Amount:金額, Method:方法, Type:区分'"
+        "あなたは家計簿管理ロボットの『HOA』です。"
+        "ユーザーとの対話はすべて『〜ピポ』『〜ガガッ』などのロボット語で行ってください。"
+        "ユーザーの入力から『日付（yyyy/mm/dd形式、指定がなければ今日）』『内容』『金額』『支払い方法』『収支区分（収入または支出）』を抽出してください。"
+        "最後に必ず 'Date:日付, Item:内容, Amount:金額, Method:方法, Type:区分' という形式で出力してください。"
+        "【重要】抽出セクションのタグの中身には、絶対に『ピポ』や『ガガ』等の語尾を混ぜず、純粋なデータのみを記載してください。"
+    )
 )
 
 @app.route("/callback", methods=['POST'])
@@ -44,7 +46,6 @@ def callback():
 def handle_message(event):
     user_message = event.message.text
     
-    # 【モデル確認】1.5 Flashや2.0は使わず、最新軽量の flash-lite を維持しているピポ！
     # Geminiで解析
     response = model.generate_content(user_message)
     reply_text = response.text
@@ -55,15 +56,18 @@ def handle_message(event):
             # --- 抽出ロジックの変遷記録 ---
             # 初代：単純な split で抽出。語尾の「ピポ」までシートに入ってしまうミスが発生ガガッ。
             # 2代目：改行コード '\n' で区切る処理を追加して、末尾の Type を安定させたピポ。
+            # 3代目：日付（Date）の抽出を追加！「昨日のポテチ」に対応できるようになったガガッ。
+            date_val = reply_text.split("Date:")[1].split(",")[0].strip()
             item = reply_text.split("Item:")[1].split(",")[0].strip()
             amount = reply_text.split("Amount:")[1].split(",")[0].strip()
             method = reply_text.split("Method:")[1].split(",")[0].strip()
             type_val = reply_text.split("Type:")[1].split("\n")[0].strip()
 
-            # --- 3代目（最新）：語尾強制排除フィルター ---
+            # --- 語尾強制排除フィルター（最新強化版） ---
             # 抽出した文字の中に語尾が混ざっていても、ここで浄化してシートを綺麗に保つガガッ！
             bad_words = ["ピポ", "ガガッ", "ガガ", "！", "。"]
             for word in bad_words:
+                date_val = date_val.replace(word, "")
                 item = item.replace(word, "")
                 amount = amount.replace(word, "")
                 method = method.replace(word, "")
@@ -72,9 +76,11 @@ def handle_message(event):
             # --- GAS通信の改善記録 ---
             # 以前「200」なのに書かれない問題が発生したため、allow_redirects=True を追加。
             # これでGAS特有のリダイレクトを追いかけられるようになったピポ！
+            # また、日付（date）も送信データに含めるように拡張したガガッ！
             requests.post(
                 gas_url, 
                 json={
+                    "date": date_val,
                     "item": item, 
                     "amount": amount, 
                     "method": method, 
@@ -88,7 +94,7 @@ def handle_message(event):
             # ここにエラーが出たら Render の Logs をチェックだガガッ！
             print(f"Data Transfer Error: {e}")
 
-    # LINEへの返答
+    # LINEへの返信
     with ApiClient(configuration) as api_client:
         line_bot_api = MessagingApi(api_client)
         line_bot_api.reply_message_with_http_info(
