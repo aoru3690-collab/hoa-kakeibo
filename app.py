@@ -23,11 +23,11 @@ genai.configure(api_key=gemini_key)
 model = genai.GenerativeModel(
     model_name="models/gemini-flash-lite-latest",
     system_instruction=(
-        "あなたは家計簿管理ロボットの『HOA』です。"
-        "返答はすべて『〜ピポ』『〜ガガッ』などのロボット語で行ってください。"
-        "ユーザーの入力から『内容』『金額』『支払い方法（不明なら不明）』『収支区分（収入または支出）』を抽出し、"
-        "最後に必ず 'Item:内容, Amount:金額, Method:方法, Type:区分' という形式で出力してください。"
-    )
+    "あなたは家計簿管理ロボットの『HOA』です。"
+    "ユーザーとの会話は『〜ピポ』『〜ガガッ』等のロボット語で行ってください。"
+    "ただし、最後にデータ抽出用の文字列を必ず出力してください。"
+    "【重要】抽出セクションのタグ(Item, Amount, Method, Type)の中身には、絶対に『ピポ』や『ガガ』等の語尾を混ぜず、純粋なデータのみを記載してください。"
+    "形式：'Item:内容, Amount:金額, Method:方法, Type:区分'"
 )
 
 @app.route("/callback", methods=['POST'])
@@ -44,6 +44,7 @@ def callback():
 def handle_message(event):
     user_message = event.message.text
     
+    # 【モデル確認】1.5 Flashや2.0は使わず、最新軽量の flash-lite を維持しているピポ！
     # Geminiで解析
     response = model.generate_content(user_message)
     reply_text = response.text
@@ -51,15 +52,27 @@ def handle_message(event):
     # スプレッドシート（GAS）にデータを送信する処理
     if "Item:" in reply_text:
         try:
-            # 抽出処理（お尻のカンマや改行に強くなるように修正したピポ！）
+            # --- 抽出ロジックの変遷記録 ---
+            # 初代：単純な split で抽出。語尾の「ピポ」までシートに入ってしまうミスが発生ガガッ。
+            # 2代目：改行コード '\n' で区切る処理を追加して、末尾の Type を安定させたピポ。
             item = reply_text.split("Item:")[1].split(",")[0].strip()
             amount = reply_text.split("Amount:")[1].split(",")[0].strip()
             method = reply_text.split("Method:")[1].split(",")[0].strip()
-            # Typeの後に何かが続いてもしっかり抽出するピポ！
             type_val = reply_text.split("Type:")[1].split("\n")[0].strip()
 
-            # GASへポスト（リダイレクトを許可して、タイムアウトも設定したガガッ！）
-            gas_res = requests.post(
+            # --- 3代目（最新）：語尾強制排除フィルター ---
+            # 抽出した文字の中に語尾が混ざっていても、ここで浄化してシートを綺麗に保つガガッ！
+            bad_words = ["ピポ", "ガガッ", "ガガ", "！", "。"]
+            for word in bad_words:
+                item = item.replace(word, "")
+                amount = amount.replace(word, "")
+                method = method.replace(word, "")
+                type_val = type_val.replace(word, "")
+
+            # --- GAS通信の改善記録 ---
+            # 以前「200」なのに書かれない問題が発生したため、allow_redirects=True を追加。
+            # これでGAS特有のリダイレクトを追いかけられるようになったピポ！
+            requests.post(
                 gas_url, 
                 json={
                     "item": item, 
@@ -70,12 +83,12 @@ def handle_message(event):
                 allow_redirects=True,
                 timeout=10
             )
-            print(f"GAS Response Status: {gas_res.status_code}") # ログで確認できるピポ
             
         except Exception as e:
+            # ここにエラーが出たら Render の Logs をチェックだガガッ！
             print(f"Data Transfer Error: {e}")
 
-    # LINEへの返信（ここは変更なしピポ！）
+    # LINEへの返答
     with ApiClient(configuration) as api_client:
         line_bot_api = MessagingApi(api_client)
         line_bot_api.reply_message_with_http_info(
