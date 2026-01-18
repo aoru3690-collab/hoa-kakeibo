@@ -1,12 +1,14 @@
 import os
 import requests
+import io
 from datetime import datetime, timedelta, timezone
 from flask import Flask, request, abort
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
-from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage
-from linebot.v3.webhooks import MessageEvent, TextMessageContent
+from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, MessagingApiBlob, ReplyMessageRequest, TextMessage
+from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent
 import google.generativeai as genai
+from PIL import Image
 
 app = Flask(__name__)
 
@@ -20,16 +22,16 @@ configuration = Configuration(access_token=line_token)
 handler = WebhookHandler(line_secret)
 genai.configure(api_key=gemini_key)
 
-# HOAの設定（ロボット語 + 日付抽出対応）
-# 【モデル確認】Gemini 1.5 Flashや2.0は使わず、約束通り軽量最新の models/gemini-flash-lite-latest を使用ピポ！
+# HOAの設定（画像とテキスト両方に対応ピポ！）
+# 【モデル確認】models/gemini-flash-lite-latest を維持！
 model = genai.GenerativeModel(
     model_name="models/gemini-flash-lite-latest",
     system_instruction=(
         "あなたは家計簿管理ロボットの『HOA』です。"
         "ユーザーとの対話はすべて『〜ピポ』『〜ガガッ』などのロボット語で行ってください。"
-        "ユーザーの入力から『日付（yyyy/mm/dd形式）』『内容』『金額』『支払い方法』『収支区分（収入または支出）』を抽出してください。"
+        "ユーザーからメッセージや画像（レシート・スクショ等）が届いたら、『日付（yyyy/mm/dd）』『内容』『金額』『支払い方法』『収支区分』を抽出してください。"
         "最後に必ず 'Date:日付, Item:内容, Amount:金額, Method:方法, Type:区分' という形式で出力してください。"
-        "【重要】抽出セクションのタグの中身には、絶対に『ピポ』や『ガガ』等の語尾を混ぜず、純粋なデータのみを記載してください。"
+        "【重要】抽出セクションのタグ内には絶対語尾を混ぜないでください。"
     )
 )
 
@@ -43,75 +45,69 @@ def callback():
         abort(400)
     return 'OK'
 
-@handler.add(MessageEvent, message=TextMessageContent)
-def handle_message(event):
-    user_message = event.message.text
-    
-    # --- タイムスリップ防止機能を追加！ ---
-    # 日本の現在時刻を取得して、Geminiに「今日」を教えるピポ！
-    jst = timezone(timedelta(hours=+9), 'JST')
-    today_str = datetime.now(jst).strftime('%Y/%m/%d')
-    
-    # Geminiへの依頼文（プロンプト）に今日の日付を混ぜるガガッ！
-    prompt = f"今日の日付は {today_str} です。これを基準にして以下のメッセージから家計簿データを抽出してピポ！\n\n{user_message}"
-    
+# --- 共通のデータ送信・返信ロジック ---
+def process_and_reply(event, prompt_content):
     # Geminiで解析
-    response = model.generate_content(prompt)
+    response = model.generate_content(prompt_content)
     reply_text = response.text
 
-    # スプレッドシート（GAS）にデータを送信する処理
     if "Item:" in reply_text:
         try:
-            # --- 抽出ロジックの変遷記録 ---
-            # 初代：単純な split で抽出。語尾の「ピポ」までシートに入ってしまうミスが発生ガガッ。
-            # 2代目：改行コード '\n' で区切る処理を追加して、末尾の Type を安定させたピポ。
-            # 3代目：日付（Date）の抽出を追加！「昨日のポテチ」に対応できるようになったガガッ。
+            # 抽出（過去の改善履歴を反映！）
             date_val = reply_text.split("Date:")[1].split(",")[0].strip()
             item = reply_text.split("Item:")[1].split(",")[0].strip()
             amount = reply_text.split("Amount:")[1].split(",")[0].strip()
             method = reply_text.split("Method:")[1].split(",")[0].strip()
             type_val = reply_text.split("Type:")[1].split("\n")[0].strip()
 
-            # --- 語尾強制排除フィルター（最新強化版） ---
-            # 抽出した文字の中に語尾が混ざっていても、ここで浄化してシートを綺麗に保つガガッ！
+            # 語尾強制排除フィルター（最新強化版）
             bad_words = ["ピポ", "ガガッ", "ガガ", "！", "。"]
             for word in bad_words:
-                date_val = date_val.replace(word, "")
-                item = item.replace(word, "")
-                amount = amount.replace(word, "")
-                method = method.replace(word, "")
-                type_val = type_val.replace(word, "")
+                date_val, item, amount, method, type_val = [v.replace(word, "") for v in [date_val, item, amount, method, type_val]]
 
-            # --- GAS通信の改善記録 ---
-            # 以前「200」なのに書かれない問題が発生したため、allow_redirects=True を追加。
-            # これでGAS特有のリダイレクトを追いかけられるようになったピポ！
-            # また、日付（date）も送信データに含めるように拡張したガガッ！
-            requests.post(
-                gas_url, 
-                json={
-                    "date": date_val,
-                    "item": item, 
-                    "amount": amount, 
-                    "method": method, 
-                    "type": type_val
-                },
-                allow_redirects=True,
-                timeout=10
-            )
+            # GASへ送信（allow_redirects=True を維持ピポ！）
+            requests.post(gas_url, json={
+                "date": date_val, "item": item, "amount": amount, "method": method, "type": type_val
+            }, allow_redirects=True, timeout=10)
             
         except Exception as e:
-            # ここにエラーが出たら Render の Logs をチェックだガガッ！
             print(f"Data Transfer Error: {e}")
 
-    # LINEへの返信
     with ApiClient(configuration) as api_client:
         line_bot_api = MessagingApi(api_client)
         line_bot_api.reply_message_with_http_info(
-            ReplyMessageRequest(
-                reply_token=event.reply_token,
-                messages=[TextMessage(text=reply_text)]
-            )
+            ReplyMessageRequest(reply_token=event.reply_token, messages=[TextMessage(text=reply_text)])
         )
+
+# テキストメッセージ担当
+@handler.add(MessageEvent, message=TextMessageContent)
+def handle_message(event):
+    jst = timezone(timedelta(hours=+9), 'JST')
+    today_str = datetime.now(jst).strftime('%Y/%m/%d')
+    prompt = [f"今日の日付は {today_str} です。抽出してピポ！\n\n{event.message.text}"]
+    process_and_reply(event, prompt)
+
+# 画像メッセージ担当（新設ガガッ！）
+@handler.add(MessageEvent, message=ImageMessageContent)
+def handle_image(event):
+    with ApiClient(configuration) as api_client:
+        line_bot_blob_api = MessagingApiBlob(api_client)
+        # LINEサーバーから画像バイナリを取得
+        message_content = line_bot_blob_api.get_message_content(message_id=event.message.id)
+        
+        # PIL Imageに変換
+        image_data = io.BytesIO(message_content)
+        img = Image.open(image_data)
+        
+        jst = timezone(timedelta(hours=+9), 'JST')
+        today_str = datetime.now(jst).strftime('%Y/%m/%d')
+        
+        # 画像とテキスト（指示）をセットでGeminiに投げるピポ！
+        prompt = [
+            f"今日の日付は {today_str} です。この画像（レシートやスクショ）から家計簿データを正確に抽出してピポ！",
+            img
+        ]
+        process_and_reply(event, prompt)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
