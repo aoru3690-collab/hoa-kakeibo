@@ -12,24 +12,27 @@ from PIL import Image
 
 app = Flask(__name__)
 
+# 環境変数の読み込み
 line_secret = os.getenv('LINE_CHANNEL_SECRET')
 line_token = os.getenv('LINE_CHANNEL_ACCESS_TOKEN')
 gemini_key = os.getenv('GOOGLE_API_KEY')
 gas_url = os.getenv('GAS_URL')
+# 【秘匿性】GASとの合言葉
 hoa_api_key = os.getenv('HOA_API_KEY')
 
 configuration = Configuration(access_token=line_token)
 handler = WebhookHandler(line_secret)
 genai.configure(api_key=gemini_key)
 
+# HOAの設定（画像・テキスト・削除対応）
 # 【モデル確認】models/gemini-flash-lite-latest を使用
 model = genai.GenerativeModel(
     model_name="models/gemini-flash-lite-latest",
     system_instruction=(
         "あなたは家計簿ロボット『HOA』です。ロボット語（〜ピポ、〜ガガッ）で話します。"
         "1. 記録の場合: 'Date:yyyy/mm/dd, Item:内容, Amount:金額, Method:方法, Type:区分' を出力。"
-        "2. 削除依頼の場合（例:「昨日のポテチ消して」）: 'COMMAND:DELETE, Date:yyyy/mm/dd, Item:内容' を出力してください。"
-        "今日の日付を基準に、ユーザーの意図を正確に判断してピポ！"
+        "2. 削除依頼の場合（例:「昨日のポテチ消して」）: 'COMMAND:DELETE, Date:yyyy/mm/dd, Item:内容' を出力。"
+        "今日の日付を基準に、ユーザーの意図を正確に判断してピポ！抽出タグ内には絶対に語尾を混ぜないでガガッ！"
     )
 )
 
@@ -46,10 +49,12 @@ def callback():
 def process_and_reply(event, prompt_content):
     response = model.generate_content(prompt_content)
     reply_text = response.text
+    final_reply = ""
 
-    # --- 削除コマンドの判定ガガッ！ ---
+    # --- 1. 削除コマンドの判定 ---
     if "COMMAND:DELETE" in reply_text:
         try:
+            # データの抽出とクリーニング
             d_date = reply_text.split("Date:")[1].split(",")[0].strip().replace("ピポ","").replace("ガガッ","")
             d_item = reply_text.split("Item:")[1].split("\n")[0].strip().replace("ピポ","").replace("ガガッ","")
             
@@ -63,48 +68,63 @@ def process_and_reply(event, prompt_content):
             if "deleted" in res.text:
                 final_reply = f"{d_date}の「{d_item}」を消去したピポ！スッキリガガッ！"
             else:
-                # 修正前：final_reply = f"{d_date}の「{d_item}」が見つからなかったガガッ…。"
-# 修正後（デバッグ用）：
-                final_reply = f"検索条件：日付[{d_date}] 項目[{d_item}] で探したけど見つからなかったガガッ！シートのA列とB列をチェックしてピポ！"
+                # デバッグ用に検索条件を表示するピポ
+                final_reply = f"検索条件:[{d_date}][{d_item}]で見つからなかったガガッ。シートのA列とB列を確認してピポ！"
+        except Exception as e:
+            print(f"Delete Logic Error: {e}")
+            final_reply = "削除処理の解析でエラーが起きたガガッ。"
 
-    # --- 通常の記録処理 ---
+    # --- 2. 通常の記録処理（Item: が含まれる場合） ---
     elif "Item:" in reply_text:
         try:
-            # 抽出（語尾クリーニング込み）
-            parts = {k: reply_text.split(f"{k}:")[1].split(",")[0].split("\n")[0].strip().replace("ピポ","").replace("ガガッ","") 
-                     for k in ["Date", "Item", "Amount", "Method", "Type"]}
+            parts = {}
+            for k in ["Date", "Item", "Amount", "Method", "Type"]:
+                parts[k] = reply_text.split(f"{k}:")[1].split(",")[0].split("\n")[0].strip().replace("ピポ","").replace("ガガッ","")
             
             requests.post(gas_url, json={
                 "api_key": hoa_api_key,
-                "date": parts["Date"], "item": parts["Item"], "amount": parts["Amount"], 
-                "method": parts["Method"], "type": parts["Type"]
+                "date": parts["Date"], 
+                "item": parts["Item"], 
+                "amount": parts["Amount"], 
+                "method": parts["Method"], 
+                "type": parts["Type"]
             }, timeout=10)
             final_reply = reply_text
-        except:
-            final_reply = "データ抽出に失敗したピポ…。"
+        except Exception as e:
+            print(f"Record Logic Error: {e}")
+            final_reply = "データの抽出中にエラーが起きたピポ…。"
+
+    # --- 3. その他（おしゃべり等） ---
     else:
         final_reply = reply_text
 
+    # LINEへの返信
     with ApiClient(configuration) as api_client:
         line_bot_api = MessagingApi(api_client)
         line_bot_api.reply_message_with_http_info(
-            ReplyMessageRequest(reply_token=event.reply_token, messages=[TextMessage(text=final_reply)])
+            ReplyMessageRequest(
+                reply_token=event.reply_token,
+                messages=[TextMessage(text=final_reply)]
+            )
         )
 
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
     jst = timezone(timedelta(hours=+9), 'JST')
     today_str = datetime.now(jst).strftime('%Y/%m/%d')
-    process_and_reply(event, [f"今日:{today_str}\n{event.message.text}"])
+    process_and_reply(event, [f"今日の日付は {today_str} です。抽出してピポ！\n\n{event.message.text}"])
 
 @handler.add(MessageEvent, message=ImageMessageContent)
 def handle_image(event):
     with ApiClient(configuration) as api_client:
         line_bot_blob_api = MessagingApiBlob(api_client)
-        img = Image.open(io.BytesIO(line_bot_blob_api.get_message_content(event.message.id)))
+        message_content = line_bot_blob_api.get_message_content(message_id=event.message.id)
+        img = Image.open(io.BytesIO(message_content))
+        
         jst = timezone(timedelta(hours=+9), 'JST')
         today_str = datetime.now(jst).strftime('%Y/%m/%d')
-        process_and_reply(event, [f"今日:{today_str}\n画像から抽出してピポ！", img])
+        
+        process_and_reply(event, [f"今日の日付は {today_str} です。画像から抽出してピポ！", img])
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
