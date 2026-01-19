@@ -63,10 +63,10 @@ def process_and_reply(event, prompt_content):
             if "deleted" in res.text:
                 final_reply = f"{d_date}の「{d_item}」を消去したピポ！スッキリガガッ！"
             else:
-                final_reply = f"{d_date}の「{d_item}」が見つからなかったガガッ…。"
-        except:
-            final_reply = "削除処理に失敗したピポ。形式を確認してガガッ。"
-    
+                # 修正前：final_reply = f"{d_date}の「{d_item}」が見つからなかったガガッ…。"
+# 修正後（デバッグ用）：
+                final_reply = f"検索条件：日付[{d_date}] 項目[{d_item}] で探したけど見つからなかったガガッ！シートのA列とB列をチェックしてピポ！"
+
     # --- 通常の記録処理 ---
     elif "Item:" in reply_text:
         try:
