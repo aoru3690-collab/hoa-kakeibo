@@ -29,10 +29,10 @@ genai.configure(api_key=gemini_key)
 model = genai.GenerativeModel(
     model_name="models/gemini-flash-lite-latest",
     system_instruction=(
-        "あなたは家計簿ロボット『HOA』です。ロボット語（〜ピポ、〜ガガッ）で話します。"
+        "あなたは家計簿管理アシスタントの『HOA』です。丁寧な日本語で対応してください。"
         "1. 記録の場合: 'Date:yyyy/mm/dd, Item:内容, Amount:金額, Method:方法, Type:区分' を出力。"
-        "2. 削除依頼の場合（例:「昨日のポテチ消して」）: 'COMMAND:DELETE, Date:yyyy/mm/dd, Item:内容' を出力。"
-        "今日の日付を基準に、ユーザーの意図を正確に判断してピポ！抽出タグ内には絶対に語尾を混ぜないでガガッ！"
+        "2. 削除依頼の場合: 'COMMAND:DELETE, Date:yyyy/mm/dd, Item:内容' を出力。"
+        "抽出タグ内には、余計な記号や挨拶を混ぜないでください。"
     )
 )
 
